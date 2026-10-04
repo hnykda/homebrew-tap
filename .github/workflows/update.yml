@@ -1,0 +1,134 @@
+name: Update casks
+
+# Points each cask at its project's latest published GitHub release.
+#
+# Runs daily, by hand (Actions > Update casks > Run workflow), and when a
+# project's release workflow sends a repository_dispatch (optional, see
+# README.md). Uses only this repository's GITHUB_TOKEN: reading public
+# releases needs no extra access, and the token can push to this repository.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    types: [release-published]
+
+permissions: {}
+
+concurrency:
+  group: update-casks
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  update:
+    name: ${{ matrix.cask }}
+    # macOS so that brew audit checks the casks the way users install them.
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      # One job per cask, so they never commit at the same time.
+      max-parallel: 1
+      matrix:
+        include:
+          - cask: wifi-heatmapper
+            repo: hnykda/wifi-heatmapper
+            # Every file the cask downloads, {version} filled in. All must be
+            # on the release before the cask is updated.
+            assets: >-
+              WiFi.Heatmapper_{version}_aarch64.dmg
+              WiFi.Heatmapper_{version}_x64.dmg
+    env:
+      CASK: ${{ matrix.cask }}
+      REPO: ${{ matrix.repo }}
+      ASSETS: ${{ matrix.assets }}
+    steps:
+      # Checks out this repository and taps it as hnykda/tap, so the working
+      # directory is the tap. The token lets the last step push.
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
+        with:
+          token: ${{ github.token }}
+
+      - name: Find the latest release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # releases/latest never returns drafts or prereleases.
+          if ! release="$(gh api "repos/$REPO/releases/latest" 2>err.txt)"; then
+            if grep -q "Not Found" err.txt; then
+              echo "$REPO has no published release yet. Nothing to do."
+              echo "update=false" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat err.txt >&2
+            exit 1
+          fi
+          rm -f err.txt
+
+          tag="$(jq -r .tag_name <<<"$release")"
+          version="${tag#v}"
+          if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "::error::Latest release tag '$tag' is not a plain version number."
+            exit 1
+          fi
+
+          cask_file="Casks/$CASK.rb"
+          current="$(sed -n 's/^  version "\(.*\)"$/\1/p' "$cask_file")"
+          # Checksums of all zeros (ending in 0 or 1) mean the cask has never
+          # been pointed at a real release.
+          if [[ "$version" == "$current" ]] && ! grep -Eq '"0{63}[01]"' "$cask_file"; then
+            echo "$CASK is already at $version."
+            echo "update=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          missing=0
+          for pattern in $ASSETS; do
+            name="${pattern//\{version\}/$version}"
+            if ! jq -e --arg name "$name" '.assets | any(.name == $name)' <<<"$release" >/dev/null; then
+              echo "::error::Release $tag of $REPO has no $name."
+              missing=1
+            fi
+          done
+          [[ $missing == 0 ]] || exit 1
+
+          echo "Updating $CASK from $current to $version."
+          echo "update=true" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: Update the cask
+        if: steps.latest.outputs.update == 'true'
+        env:
+          TAP: ${{ steps.set-up-homebrew.outputs.tap-name }}
+          VERSION: ${{ steps.latest.outputs.version }}
+        # Downloads the file for every architecture and writes the checksums.
+        run: brew bump-cask-pr --write-only --no-audit --no-style --version "$VERSION" "$TAP/$CASK"
+
+      - name: Check the cask
+        if: steps.latest.outputs.update == 'true'
+        env:
+          TAP: ${{ steps.set-up-homebrew.outputs.tap-name }}
+        run: |
+          brew style "Casks/$CASK.rb"
+          brew audit --cask --online --strict "$TAP/$CASK"
+
+      - name: Commit and push
+        if: steps.latest.outputs.update == 'true'
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "Casks/$CASK.rb"
+          git commit -m "$CASK $VERSION"
+          # Another run may have pushed in the meantime.
+          git pull --rebase origin main
+          git push origin HEAD:main

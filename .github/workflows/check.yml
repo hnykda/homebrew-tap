@@ -1,0 +1,37 @@
+name: Check casks
+
+on:
+  push:
+    branches: [main]
+    paths: ["Casks/**", ".github/workflows/check.yml"]
+  pull_request:
+    paths: ["Casks/**", ".github/workflows/check.yml"]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  check:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
+
+      - name: Style
+        run: brew style Casks
+
+      - name: Audit
+        env:
+          TAP: ${{ steps.set-up-homebrew.outputs.tap-name }}
+        # Offline: a cask that still has placeholder checksums (no release
+        # yet) passes; the update workflow runs the online audit.
+        run: |
+          for file in Casks/*.rb; do
+            brew audit --cask --strict "$TAP/$(basename "$file" .rb)"
+          done
