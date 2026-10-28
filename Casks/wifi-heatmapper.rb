@@ -4,9 +4,9 @@ cask "wifi-heatmapper" do
   # version and sha256 are rewritten by .github/workflows/update.yml from the
   # latest published release. Checksums of all zeros (ending in 0 or 1) are
   # placeholders: there is no release yet.
-  version "0.6.0"
-  sha256 arm:   "293f31a4939a12131cc049cd84ddbd382406861f1e9d2ace5d242d0c1f458898",
-         intel: "abda6b04989c0de91a68f9afb6638026771955c6ef6bf0ec41314054dc3b96d0"
+  version "0.7.0"
+  sha256 arm:   "e9c219a8590d4332a2cad8e55277fbcc54d884c86154ff993ca44be33f5d12c6",
+         intel: "a4443ebe70592ba91df49edc9c005e8a0fb5e2905b0665d5d9032ac83330aa84"
 
   url "https://github.com/hnykda/wifi-heatmapper/releases/download/v#{version}/WiFi.Heatmapper_#{version}_#{arch}.dmg",
       verified: "github.com/hnykda/wifi-heatmapper/"
